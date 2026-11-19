@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A verified panel address change, and a later canary finalize or rollback,
+  keep retained baselines and the active provisioning record on the new host
+  when the slug and pinned SSH identity still match. A different slug or SSH
+  identity is still refused. `baseline_owner_mismatch` is shown and logged
+  instead of the generic `canary_operation_failed`.
 - Removing an unactivated onboarding baseline now checks candidate release
   paths with `os.path.lexists`, which older panel Pythons provide. A failed
   proof logs the stage (snapshot section, verify, check_restored kind,
