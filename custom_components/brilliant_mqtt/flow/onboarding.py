@@ -17,6 +17,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 
 from ..const import (
+    CONF_ALLOW_AARCH64,
     CONF_HOST,
     CONF_MESH_PRIORITY,
     CONF_PANEL,
@@ -47,6 +48,8 @@ from .schemas import (
     FlowInputError,
     allocate_mesh_priority,
     allocate_panel_slug,
+    experimental_aarch64_schema,
+    normalize_experimental_aarch64_input,
     normalize_panel_connect_input,
     normalize_panel_name,
     panel_confirm_schema,
@@ -105,6 +108,8 @@ class _PanelOnboardingMixin:
     _retained_finalize: RetainedRollback | None
     _unactivated_discard: RetainedRollback | None
     _journal_recover: ProvisioningRecord | None
+    _aarch64_opt_in_required: bool
+    _allow_aarch64: bool
 
     def _init_panel_onboarding(self) -> None:
         self._panel_host = None
@@ -129,6 +134,8 @@ class _PanelOnboardingMixin:
         self._retained_finalize = None
         self._unactivated_discard = None
         self._journal_recover = None
+        self._aarch64_opt_in_required = False
+        self._allow_aarch64 = False
         self._idle_unsub: Callable[[], None] | None = None
 
     def _provisioning_started(self) -> bool:
@@ -312,6 +319,8 @@ class _PanelOnboardingMixin:
         self._unactivated_discard = None
         self._journal_recover = None
         self._panel_facts = None
+        self._aarch64_opt_in_required = False
+        self._allow_aarch64 = False
         try:
             identity = await gateway.async_fetch_host_identity(host)
             hass = cast(_FlowSurface, self).hass
@@ -361,6 +370,10 @@ class _PanelOnboardingMixin:
             self._panel_root_password = None
             return {}, _provisioning_failure(error), None
         except PanelCompatibilityError as error:
+            if error.code == "unsupported_architecture" and error.architecture == "aarch64":
+                self._panel_identity = identity
+                self._aarch64_opt_in_required = True
+                return {}, None, None
             return {}, _panel_failure(error.code, stage="panel_inspection"), None
         except (OSError, asyncssh.Error):
             self._panel_root_password = None
@@ -395,6 +408,8 @@ class _PanelOnboardingMixin:
                     },
                 )
             if not errors and failure is None:
+                if self._aarch64_opt_in_required:
+                    return await self.async_step_experimental_aarch64()
                 if self._journal_recover is not None:
                     return await self.async_step_panel_recover_journal()
                 if self._unactivated_discard is not None:
@@ -414,6 +429,65 @@ class _PanelOnboardingMixin:
                 if failure is not None
                 else {"documentation_url": _PANEL_ONBOARDING_DOCUMENTATION_URL}
             ),
+        )
+
+    async def async_step_experimental_aarch64(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> _OnboardingResult:
+        """Admit an aarch64/i350 panel only after an explicit, default-off opt-in."""
+        flow = cast(_FlowSurface, self)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                normalize_experimental_aarch64_input(user_input)
+            except FlowInputError as error:
+                errors = dict(error.errors)
+            else:
+                host = self._panel_host
+                root_password = self._panel_root_password
+                identity = self._panel_identity
+                if host is None or root_password is None or identity is None:
+                    return flow.async_abort(reason="cannot_connect")
+                try:
+                    facts = await gateway._async_inspect_candidate(
+                        flow.hass,
+                        host,
+                        root_password,
+                        identity,
+                        allow_aarch64=True,
+                    )
+                except PanelCompatibilityError as error:
+                    return flow.async_show_form(
+                        step_id="experimental_aarch64",
+                        data_schema=experimental_aarch64_schema(),
+                        errors={"base": error.code},
+                        description_placeholders={
+                            "documentation_url": _PANEL_ONBOARDING_DOCUMENTATION_URL
+                        },
+                    )
+                except Exception:
+                    return flow.async_abort(reason="cannot_connect")
+                self._allow_aarch64 = True
+                self._aarch64_opt_in_required = False
+                self._panel_facts = facts
+                self._panel_failure = None
+                if self._journal_recover is not None:
+                    return await self.async_step_panel_recover_journal()
+                if self._unactivated_discard is not None:
+                    return await self.async_step_panel_discard_unactivated()
+                if self._retained_finalize is not None:
+                    return await self.async_step_panel_finalize_retained()
+                return await self.async_step_panel_confirm()
+
+        self._arm_preprovision_idle_timeout()
+        return flow.async_show_form(
+            step_id="experimental_aarch64",
+            data_schema=experimental_aarch64_schema(),
+            errors=errors,
+            description_placeholders={
+                "documentation_url": _PANEL_ONBOARDING_DOCUMENTATION_URL
+            },
         )
 
     async def async_step_panel_discard_unactivated(
@@ -686,6 +760,7 @@ class _PanelOnboardingMixin:
                             mesh_priority=priority,
                             selected_components=_CORE_COMPONENTS,
                             feature_overrides=MappingProxyType({}),
+                            allow_aarch64=self._allow_aarch64,
                         )
                         self._provisioner = gateway._get_panel_provisioner(
                             flow.hass,

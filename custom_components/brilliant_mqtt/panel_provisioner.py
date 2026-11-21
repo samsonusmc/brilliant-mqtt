@@ -28,6 +28,7 @@ from .const import (
     COMPONENT_WIFI_WATCHDOG,
     CONF_COMPONENTS,
     CONF_FEATURE_OVERRIDES,
+    CONF_ALLOW_AARCH64,
     CONF_HOST,
     CONF_HOT_POLL_SECONDS,
     CONF_IDENTITY_FINGERPRINT,
@@ -395,6 +396,7 @@ class PanelInstallRequest:
     feature_overrides: Mapping[str, JsonValue] = field(repr=False)
     hot_poll_seconds: int | None = None
     resync_seconds: int | None = None
+    allow_aarch64: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -408,6 +410,7 @@ class PanelInstallRequest:
             or not isinstance(self.slug, str)
             or _PANEL_SLUG.fullmatch(self.slug) is None
             or self.slug == MESH_PANEL
+            or type(self.allow_aarch64) is not bool
             or type(self.mesh_priority) is not int
             or self.mesh_priority < 0
             or self.mesh_priority > 99
@@ -1261,7 +1264,9 @@ class PanelProvisioner:
         await _report(progress, ProvisioningProgressStage.INSPECTING)
         state.failure_code = "inspection_failed"
         state.failure_stage = "inspection"
-        facts = await self._inspector(state.shell, identity)
+        facts = await self._inspector(
+            state.shell, identity, allow_aarch64=request.allow_aarch64
+        )
         if not isinstance(facts, PanelFacts) or facts.fingerprint != identity.fingerprint:
             raise PanelProvisioningError("inspection_failed")
         if await self._duplicate_fingerprint(identity.fingerprint):
@@ -2699,6 +2704,7 @@ def _panel_data(
                     else {}
                 ),
                 CONF_PROVISIONING_TRANSACTION_ID: str(transaction_id),
+                **({CONF_ALLOW_AARCH64: True} if request.allow_aarch64 else {}),
             }
         )
     )

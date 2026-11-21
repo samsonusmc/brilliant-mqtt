@@ -24,6 +24,7 @@ from .const import (
     CONF_HA_CONTROL_DOMAINS,
     CONF_HA_CONTROL_ENABLED,
     CONF_HA_CONTROL_LABEL,
+    CONF_ALLOW_AARCH64,
     CONF_HOST,
     CONF_HOT_POLL_SECONDS,
     CONF_HUE_CA_CERT,
@@ -105,12 +106,14 @@ _PANEL_KEYS = frozenset(
         CONF_HOT_POLL_SECONDS,
         CONF_RESYNC_SECONDS,
         CONF_PROVISIONING_TRANSACTION_ID,
+        CONF_ALLOW_AARCH64,
     }
 )
 _PANEL_REQUIRED_KEYS = _PANEL_KEYS - {
     CONF_HOT_POLL_SECONDS,
     CONF_PROVISIONING_TRANSACTION_ID,
     CONF_RESYNC_SECONDS,
+    CONF_ALLOW_AARCH64,
 }
 
 
@@ -366,6 +369,7 @@ class PanelConfig:
     hot_poll_seconds: int | None
     resync_seconds: int | None
     provisioning_transaction_id: str | None
+    allow_aarch64: bool = False
 
     @classmethod
     def from_subentry(cls, subentry: ConfigSubentry) -> PanelConfig:
@@ -400,6 +404,9 @@ class PanelConfig:
                 error_code="invalid_panel_entry_data",
             )
             hot_poll_seconds, resync_seconds = _panel_agent_cadences(data)
+            allow_aarch64 = data.get(CONF_ALLOW_AARCH64, False)
+            if type(allow_aarch64) is not bool:
+                raise _invalid("invalid_panel_entry_data")
             return cls(
                 identity_fingerprint=identity_fingerprint,
                 ssh_host_key=_required_string(data, CONF_SSH_HOST_KEY),
@@ -415,6 +422,7 @@ class PanelConfig:
                 hot_poll_seconds=hot_poll_seconds,
                 resync_seconds=resync_seconds,
                 provisioning_transaction_id=transaction_id,
+                allow_aarch64=allow_aarch64,
             )
         except EntryDataError:
             raise
